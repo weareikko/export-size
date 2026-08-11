@@ -2,7 +2,9 @@
 //
 // Each package's public surface is bundled with every bare dependency (peers,
 // third-party) left external and the output minified, then measured raw, gzipped
-// and brotli-compressed. Two modes are supported:
+// and brotli-compressed. Dynamic `import()` calls are split out and excluded:
+// only the code that loads eagerly with the export counts. Two modes are
+// supported:
 //
 //   named-exports  Size each named export as it is consumed from the barrel
 //                  (`import { X } from '<pkg>'`), by tree-shaking that single
@@ -20,7 +22,7 @@
 // The packages must be built first. Pass `--json <path>` to also write the raw
 // report as JSON (consumed by export-size-comment.mjs).
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, relative, resolve } from 'node:path';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 import { build } from 'esbuild';
 
@@ -52,14 +54,21 @@ function brotliSize(contents) {
   }).length;
 }
 
-// Bundle with esbuild and measure the combined output (dynamic-import chunks are
-// summed) raw, gzipped and brotli-compressed.
+// Bundle with esbuild and measure the code that loads eagerly with the entry:
+// the entry chunk plus every chunk it reaches through static imports. Chunks
+// only reachable through dynamic `import()` load on demand and do not count
+// toward an export's size.
 async function sizeOf(options) {
   const result = await build({
     bundle: true,
     minify: true,
     format: 'esm',
     platform: 'neutral',
+    // Split on dynamic-import boundaries so on-demand code lands in its own
+    // chunks instead of being inlined into the measured entry.
+    splitting: true,
+    outdir: 'export-size-out',
+    metafile: true,
     // Leave every bare import (peers, third-party) external so the measurement
     // reflects the package's own shipped code, not its dependencies.
     packages: 'external',
@@ -67,7 +76,33 @@ async function sizeOf(options) {
     logLevel: 'silent',
     ...options,
   });
-  const contents = Buffer.concat(result.outputFiles.map((file) => file.contents));
+
+  const { outputs } = result.metafile;
+  // Every split chunk carries an `entryPoint` in the metafile, so seed the walk
+  // from the requested entry only: the file passed as entry point, or `<stdin>`.
+  const requested = options.entryPoints?.[0];
+  const expected = requested
+    ? relative(process.cwd(), requested).replaceAll('\\', '/')
+    : '<stdin>';
+  const eager = new Set();
+  const queue = Object.keys(outputs).filter((path) => outputs[path].entryPoint === expected);
+  while (queue.length > 0) {
+    const path = queue.pop();
+    if (eager.has(path)) continue;
+    eager.add(path);
+    for (const imported of outputs[path].imports) {
+      if (!imported.external && imported.kind !== 'dynamic-import') queue.push(imported.path);
+    }
+  }
+
+  // Metafile keys are cwd-relative POSIX paths; output file paths are absolute.
+  const files = result.outputFiles.filter((file) =>
+    eager.has(relative(process.cwd(), file.path).replaceAll('\\', '/')),
+  );
+  if (files.length === 0) {
+    throw new Error('export-size: no output file matched the entry point.');
+  }
+  const contents = Buffer.concat(files.map((file) => file.contents));
   return { raw: contents.length, gzip: gzipSync(contents).length, brotli: brotliSize(contents) };
 }
 

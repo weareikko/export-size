@@ -8,6 +8,9 @@ changed.
 Each export is bundled with peer and third-party dependencies left **external**
 and the output **minified**, then reported raw, gzipped and brotli-compressed —
 so the number reflects the package's own shipped code, not its dependencies.
+Dynamic `import()` calls are split out and **excluded**: an export that lazily
+loads other modules (a manifest, an autoload entry) is measured by the code it
+loads eagerly, not by everything it can reach on demand.
 
 ## Usage
 

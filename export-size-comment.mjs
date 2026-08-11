@@ -100,7 +100,10 @@ for (const pkg of packages) {
 }
 
 const body = [MARKER, '## Export size', ''];
-body.push('Bundled per export with peer dependencies left external and minified; sizes are gzipped.', '');
+body.push(
+  'Bundled per export with peer dependencies left external, dynamic imports excluded and the output minified; sizes are gzipped.',
+  '',
+);
 
 if (changedCount === 0) {
   body.push('✅ No export size changes.', '');
