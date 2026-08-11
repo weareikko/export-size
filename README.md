@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: weareikko/export-size@v1
+      - uses: weareikko/export-size@1
         with:
           packages: |
             @studiometa/ui:packages/ui
