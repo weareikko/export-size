@@ -1,0 +1,15 @@
+{
+  "name": "@weareikko/export-size",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "GitHub Action to measure and diff the export sizes of npm packages, and comment on the pull request.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/weareikko/export-size.git"
+  },
+  "dependencies": {
+    "esbuild": "0.27.4"
+  }
+}

@@ -1,0 +1,95 @@
+name: 'Export size'
+description: 'Measure and diff the published export sizes of npm packages, and comment on the pull request.'
+author: 'Ikko'
+branding:
+  icon: 'bar-chart-2'
+  color: 'blue'
+
+inputs:
+  packages:
+    description: 'Packages to measure, as `name:dir` pairs — one per line or comma-separated (e.g. `@studiometa/ui:packages/ui`). `dir` alone reads the name from its package.json.'
+    required: true
+  build:
+    description: 'Command that builds the packages, run in each checkout before measuring (e.g. `npm run build`).'
+    required: true
+  mode:
+    description: '`named-exports` (size each barrel export as `import { X } from` <pkg>) or `subpaths` (size each export subpath).'
+    required: false
+    default: 'named-exports'
+  node-version:
+    description: 'Node.js version.'
+    required: false
+    default: '24'
+  comment:
+    description: 'Upsert a sticky pull-request comment with the diff.'
+    required: false
+    default: 'true'
+  github-token:
+    description: 'Token used to upsert the comment (needs `pull-requests: write`).'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - name: Install the action's dependencies
+      shell: bash
+      run: cd "$GITHUB_ACTION_PATH" && npm ci --no-audit --no-fund
+
+    - name: Build and measure the pull request
+      shell: bash
+      env:
+        EXPORT_SIZE_PACKAGES: ${{ inputs.packages }}
+        EXPORT_SIZE_MODE: ${{ inputs.mode }}
+      run: |
+        npm install --no-audit --no-fund
+        ${{ inputs.build }}
+        node "$GITHUB_ACTION_PATH/export-size.mjs" --json "$RUNNER_TEMP/export-size-head.json"
+
+    # Measure the base branch with the same (action-provided) script, so the two
+    # sides are always compared with identical measurement logic.
+    - name: Check out the base branch
+      if: github.event_name == 'pull_request'
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        path: __export-size-base
+
+    - name: Build and measure the base branch
+      if: github.event_name == 'pull_request'
+      shell: bash
+      working-directory: __export-size-base
+      env:
+        EXPORT_SIZE_PACKAGES: ${{ inputs.packages }}
+        EXPORT_SIZE_MODE: ${{ inputs.mode }}
+      run: |
+        npm install --no-audit --no-fund
+        ${{ inputs.build }} || true
+        node "$GITHUB_ACTION_PATH/export-size.mjs" --json "$RUNNER_TEMP/export-size-base.json" \
+          || echo '[]' > "$RUNNER_TEMP/export-size-base.json"
+
+    - name: Comment on the pull request
+      if: inputs.comment == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        [ -f "$RUNNER_TEMP/export-size-base.json" ] || echo '[]' > "$RUNNER_TEMP/export-size-base.json"
+        node "$GITHUB_ACTION_PATH/export-size-comment.mjs" \
+          "$RUNNER_TEMP/export-size-base.json" "$RUNNER_TEMP/export-size-head.json" > "$RUNNER_TEMP/export-size-comment.md"
+        marker='<!-- export-size-report -->'
+        repo='${{ github.repository }}'
+        pr='${{ github.event.pull_request.number }}'
+        id=$(gh api "repos/$repo/issues/$pr/comments" --paginate \
+          --jq ".[] | select(.body | contains(\"$marker\")) | .id" | head -n1)
+        if [ -n "$id" ]; then
+          gh api --method PATCH "repos/$repo/issues/comments/$id" -F body=@"$RUNNER_TEMP/export-size-comment.md" >/dev/null
+        else
+          gh api --method POST "repos/$repo/issues/$pr/comments" -F body=@"$RUNNER_TEMP/export-size-comment.md" >/dev/null
+        fi
