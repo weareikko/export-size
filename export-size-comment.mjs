@@ -76,7 +76,7 @@ for (const pkg of packages) {
   const headEntries = head[pkg] ?? {};
   const subpaths = [...new Set([...Object.keys(baseEntries), ...Object.keys(headEntries)])].sort();
 
-  const changed = [];
+  const changedRows = [];
   const unchanged = [];
   for (const subpath of subpaths) {
     const b = baseEntries[subpath];
@@ -84,10 +84,19 @@ for (const pkg of packages) {
     if (b && h && b.gzip === h.gzip) {
       unchanged.push(`| \`${name(subpath)}\` | ${kib(h.gzip)} | – |`);
     } else {
-      // Show the current size, or the removed one when the export is gone.
-      changed.push(`| \`${name(subpath)}\` | ${kib((h ?? b).gzip)} | ${diff(b, h)} |`);
+      changedRows.push({
+        subpath,
+        delta: (h ? h.gzip : 0) - (b ? b.gzip : 0),
+        // Show the current size, or the removed one when the export is gone.
+        row: `| \`${name(subpath)}\` | ${kib((h ?? b).gzip)} | ${diff(b, h)} |`,
+      });
     }
   }
+
+  // Largest additions first, largest deletions last; same delta keeps the
+  // alphabetical order of the subpaths.
+  changedRows.sort((a, z) => z.delta - a.delta || a.subpath.localeCompare(z.subpath));
+  const changed = changedRows.map((entry) => entry.row);
 
   if (changed.length > 0) {
     changedCount += changed.length;
